@@ -1,0 +1,50 @@
+-- Code from NLTP_ASHES: https://discord.com/channels/456765861953536020/463899353480691738/1169041743249936475
+local part_lookup
+--- Function used to retrieve the section name of the current ammo type loaded in a weapon
+--- @param obj game_object the weapon to get the ammo type from
+--- @return string the name of the section of the currently loaded ammo type
+function get_ammo_section(obj)
+    local ammo_class_id = get_ammo_type(obj)
+    local ammo_classes = parse_list(ini_sys, obj:section(), "ammo_class")
+    return ammo_classes[ammo_class_id + 1]
+end
+
+--- Function used to retrieve the id of the current ammo type loaded in a weapon
+--- @param obj game_object the weapon to get the ammo type from
+--- @return number the id of the ammo type in the ammo_class field of the weapon's config
+function get_ammo_type(obj)
+    if not obj:is_weapon() then
+        printf("!ERROR | Trying to access ammo type on a non CWeapon object")
+        return
+    end
+    return obj:cast_Weapon():GetAmmoType()
+end
+
+function actor_on_weapon_fired(obj, wpn, ammo_elapsed, grenade_elapsed, ammo_type, grenade_type)
+    if obj:id() ~= AC_ID then
+        return
+    end
+    if not wpn then
+        return
+    end
+
+    local ammo_section = get_ammo_section(wpn)
+    local salvage_coef = part_lookup:r_float_ex(ammo_section, "salvage") or 0.4
+    local ammo_components = str_explode(part_lookup:r_value(ammo_section, "parts"), ",")
+    local casing = ammo_components[1]
+    -- if we don't pass item_state, we get an entire stack of casings instead
+    local item_state = {
+        ["ammo"] = 1
+    }
+
+    -- Here we want to use the built in balancing of ammo maker mod. Lower quality rounds are less likely to yield usable casings once fired.
+    if (salvage_coef < math.random()) then
+        alife_create_item(casing, alife():object(0), item_state)
+    end
+
+end
+
+function on_game_start()
+    RegisterScriptCallback("actor_on_weapon_fired", actor_on_weapon_fired)
+    part_lookup = ini_file_ex("parts\\importer.ltx")
+end
