@@ -32,16 +32,11 @@ function actor_on_weapon_fired(obj, wpn, ammo_elapsed, grenade_elapsed, ammo_typ
     local salvage_coef = part_lookup:r_float_ex(ammo_section, "salvage") or 0.4
     local ammo_components = str_explode(part_lookup:r_value(ammo_section, "parts"), ",")
     local casing = ammo_components[1]
-    -- if we don't pass item_state, we get an entire stack of casings instead
-    local item_state = {
-        ["ammo"] = 1
-    }
 
     -- Here we want to use the built in balancing of ammo maker mod. Lower quality rounds are less likely to yield usable casings once fired.
     if (salvage_coef < math.random()) then
-        alife_create_item(casing, alife():object(0), item_state)
+        alife_create_item(casing, db.actor, {["ammo"] = 1})
     end
-
 end
 
 function on_game_start()
