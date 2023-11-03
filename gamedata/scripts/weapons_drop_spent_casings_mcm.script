@@ -1,0 +1,33 @@
+-- Mod options for MCM
+function on_mcm_load()
+    op = {
+        id = "weapons_drop_spent_casings",
+        sh = true,
+        gr = {{
+            id = "banner",
+            type = "slide",
+            text = "ui_mcm_weapons_drop_spent_casings_title",
+            size = {512, 50},
+            spacing = 20
+        }, {
+            id = "casings_max_amount",
+            type = "track",
+            val = 2,
+            min = 0,
+            max = 120,
+            step = 1,
+            def = 30
+        }, {
+            id = "drop_to_inventory",
+            type = "check",
+            val = 1,
+            def = true
+        }, {
+            id = "enable_debug",
+            type = "check",
+            val = 1,
+            def = false
+        }}
+    }
+    return op
+end

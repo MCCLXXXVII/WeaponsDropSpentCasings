@@ -1,45 +1,281 @@
--- Code from NLTP_ASHES: https://discord.com/channels/456765861953536020/463899353480691738/1169041743249936475
-local part_lookup
---- Function used to retrieve the section name of the current ammo type loaded in a weapon
---- @param obj game_object the weapon to get the ammo type from
---- @return string the name of the section of the currently loaded ammo type
-function get_ammo_section(obj)
-    local ammo_class_id = get_ammo_type(obj)
-    local ammo_classes = parse_list(ini_sys, obj:section(), "ammo_class")
-    return ammo_classes[ammo_class_id + 1]
+-- The majority of this code is written by demonized, I have only made some minor changes to spawn ammo maker cartridges instead
+--      -Mantas
+-- default amount in case of not using MCM
+local casings_max_amount = 30
+local drop_to_inventory = true
+local enable_debug = false
+
+local ammo_settings_ini
+local part_lookup -- Default ammo maker
+-- blacklist for calibers that do not spawn casings
+-- ignore some miscellaneous sections, grenades, gauss and RPG-7
+local always_ignore_calibers = {
+    ["knife"] = true,
+    ["binoc"] = true,
+    ["vog-25"] = true,
+    ["m209"] = true,
+    ["og-7"] = true,
+    ["gauss"] = true
+}
+-- allowed weapon table with not blacklisted ammo
+local weapon_table = {}
+
+-- casings table for excessive cassings management
+local casings_table = {}
+local casings_table_ids = {}
+
+local function trace_text(...)
+    if not enable_debug then
+        return
+    end
+    printf(...)
 end
 
+local function trace_table(var, mode)
+    if not enable_debug then
+        return
+    end
+    if mode == 1 and print_r then
+        print_r(var)
+    else
+        print_table(var)
+    end
+end
+
+local function get_object_by_id(id) -- same as _g.script one but without spamming in console
+    if not (id and type(id) == "number") then
+        callstack()
+        return
+    end
+
+    if (id == AC_ID) then
+        return db.actor
+    end
+
+    local obj = db.storage[id] and db.storage[id].object or level.object_by_id(id)
+    if (not obj) then
+        return
+    end
+    return obj
+end
+
+local function merge_tables(...)
+    local result = {}
+    for i, t in ipairs({...}) do
+        for k, v in pairs(t) do
+            result[k] = v
+        end
+    end
+    return result
+end
+
+-- prepare allowed weapons table
+local function build_weapons_table()
+    local tables = {always_ignore_calibers}
+    local ignore_calibers = merge_tables(unpack(tables))
+    empty_table(weapon_table)
+    ini_sys:section_for_each(function(section)
+        local ammo_string = ini_sys:r_string_ex(section, "ammo_class")
+        if ammo_string then
+            local ammo_list = parse_list(ini_sys, section, "ammo_class")
+            for i, ammo in ipairs(ammo_list) do
+                for ignore_ammo, v1 in pairs(ignore_calibers) do
+                    if string.find(ammo, ignore_ammo) then
+                        return
+                    end
+                end
+                weapon_table[section] = ini_sys:r_float_ex(section, "rpm")
+            end
+        end
+    end)
+end
+
+local function restrict_casings_tables()
+    while #casings_table > casings_max_amount do
+        local casing_id = table.remove(casings_table, 1)
+        casings_table_ids[casing_id] = nil
+        alife_release_id(casing_id)
+    end
+end
+-- Code from NLTP_ASHES: https://discord.com/channels/456765861953536020/463899353480691738/1169041743249936475
 --- Function used to retrieve the id of the current ammo type loaded in a weapon
 --- @param obj game_object the weapon to get the ammo type from
 --- @return number the id of the ammo type in the ammo_class field of the weapon's config
 function get_ammo_type(obj)
     if not obj:is_weapon() then
-        printf("!ERROR | Trying to access ammo type on a non CWeapon object")
+        trace("!ERROR | Trying to access ammo type on a non CWeapon object")
         return
     end
     return obj:cast_Weapon():GetAmmoType()
 end
 
-function actor_on_weapon_fired(obj, wpn, ammo_elapsed, grenade_elapsed, ammo_type, grenade_type)
-    if obj:id() ~= AC_ID then
+--- Function used to retrieve the section name of the current ammo type loaded in a weapon
+--- @param obj game_object the weapon to get the ammo type from
+--- @return string the name of the section of the currently loaded ammo type
+function get_ammo_section(obj)
+    if not obj then
+        printf("!ERROR | Fired weapon is nil.")
         return
     end
-    if not wpn then
+    local ammo_class_id = get_ammo_type(obj)
+    local ammo_classes = parse_list(ini_sys, obj:section(), "ammo_class")
+    return ammo_classes[ammo_class_id + 1]
+end
+
+local function is_supported_weapon(wpn)
+    return wpn and IsWeapon(wpn) and (not IsItem("fake_ammo_wpn", wpn:section())) and weapon_table[wpn:section()]
+end
+
+local function add_casing_to_tables(casing)
+    casings_table[#casings_table + 1] = casing.id
+    casings_table_ids[casing.id] = casing.id
+end
+
+function vector_rotate_x(v, angle)
+	angle = angle * 0.017453292519943295769236907684886 -- Convert degrees to radians
+	local c = math.cos(angle)
+	local s = math.sin(angle)
+	return vector():set(v.x, v.y * c - v.z * s, v.y * s + v.z * c)
+end
+
+
+function vector_rotate_z(v, angle)
+	angle = angle * 0.017453292519943295769236907684886 -- Convert degrees to radians
+	local c = math.cos(angle)
+	local s = math.sin(angle)
+	return vector():set(v.x * c - v.y * s, v.x * s + v.y * c, v.z)
+end
+
+local function offset_casing_spawn(actor_position, actor_direction)
+
+    local casing_position = actor_position
+    actor_direction = vector_rotate_y(actor_direction, random_number(-55, -70))
+    casing_position.x = actor_position.x + actor_direction.x * 1.3
+    casing_position.y = actor_position.y + actor_direction.y + 0.8
+    casing_position.z = actor_position.z + actor_direction.z * 1.3
+    return casing_position
+end
+
+local function get_casing_and_droprate(weapon)
+    local casing_obj
+    local salvage_rate
+    local ammo_section = get_ammo_section(weapon)
+    trace_text(ammo_section)
+
+    if not ammo_maker.get_ammo_recipe then
+        trace_text("Using default Ammo Maker")
+        local ammo_components = str_explode(part_lookup:r_value(ammo_section, "parts"), ",")
+        casing_obj = ammo_components[1]
+        salvage_rate = str_explode(part_lookup:r_value(ammo_section, "salvage"), ",") or 1
+
+    else
+        trace_text("Using Revised Ammo Maker")
+        local ammo_components = ammo_maker.get_ammo_recipe(ammo_section)
+        casing_obj = ammo_components[3]
+        salvage_rate = ammo_settings_ini:r_float_ex(ammo_section, "salvage_rate") or 1
+    end
+    return casing_obj, salvage_rate
+end
+
+local function set_velocity_and_spin(id, dir_x, dir_y, dir_z)
+    local obj = get_object_by_id(id)
+    if obj and obj:get_physics_shell() then
+
+        -- Apply linear force
+        local forward_force = random_number(5000, 10000)
+        local downward_force = random_number(-5000, -10000)
+        local rightward_force = random_number(5000, 8000)
+        obj:get_physics_shell():apply_force(dir_x * rightward_force, dir_y * downward_force, dir_z * forward_force)
+
+        local angular_x = random_number(-10, 10)
+        local angular_y = random_number(-10, 10)
+        local angular_z = random_number(-10, 10)
+
+        obj:get_physics_shell():apply_torque(angular_x, angular_y, angular_z)
+
+        return true
+    end
+    return false
+end
+
+local function spawn_casing(actor, weapon)
+    local actor_position = actor:position()
+    local actor_direction = actor:direction()
+    -- spawn at right of the actor
+    local casing_position = offset_casing_spawn(actor_position, actor_direction)
+    local casing_obj, salvage_rate = get_casing_and_droprate(weapon)
+    local rng = math.random()
+    trace_text("CASING: %s", casing_obj)
+    trace_text("SALVAGE RATE: %s - RNG: %s", salvage_rate, rng)
+
+    if rng <= salvage_rate then
+        if drop_to_inventory then
+            trace_text("To inventory:")
+            alife_create_item(casing_obj, db.actor, {
+                ["ammo"] = 1
+            })
+        else
+            local casing = alife_create_item(casing_obj,
+                {casing_position, actor:level_vertex_id(), actor:game_vertex_id(), nil})
+            trace_text("Dropping in world: %s", casing)
+            local data = utils_stpk.get_object_data(casing)
+            data.visual_name = "dynamics\\devices\\dev_bolt\\dev_bolt_bullet.ogf"
+            data.ammo_left = 1
+            data.direction = actor_direction
+            utils_stpk.set_object_data(data, casing)
+            add_casing_to_tables(casing)
+            restrict_casings_tables()
+            CreateTimeEvent(casing.id, casing.id, 0, set_velocity_and_spin, casing.id, actor_direction.x,
+                actor_direction.y, actor_direction.z)
+        end
+    end
+end
+
+local function actor_on_weapon_fired(actor)
+    trace_text("Weapon Fired")
+    if casings_max_amount == 0 and not drop_to_inventory then
         return
     end
 
-    local ammo_section = get_ammo_section(wpn)
-    local salvage_coef = part_lookup:r_float_ex(ammo_section, "salvage") or 0.4
-    local ammo_components = str_explode(part_lookup:r_value(ammo_section, "parts"), ",")
-    local casing = ammo_components[1]
+    local wpn = db.actor:active_item()
+    if not is_supported_weapon(wpn) then
+        trace_text("%s is not supported", wpn:section())
+        return
+    end
 
-    -- Here we want to use the built in balancing of ammo maker mod. Lower quality rounds are less likely to yield usable casings once fired.
-    if (salvage_coef < math.random()) then
-        alife_create_item(casing, db.actor, {["ammo"] = 1})
+    trace_text("%s is supported", wpn:section())
+
+    spawn_casing(actor, wpn)
+end
+
+local function load_settings()
+    if ui_mcm then
+        casings_max_amount = ui_mcm.get("weapons_drop_spent_casings/casings_max_amount")
+        drop_to_inventory = ui_mcm.get("weapons_drop_spent_casings/drop_to_inventory")
+        enable_debug = ui_mcm.get("weapons_drop_spent_casings/enable_debug")
+    end
+    build_weapons_table()
+    restrict_casings_tables()
+end
+
+local function actor_on_item_take(obj)
+    -- if casing taken, remove it from tables so it won't be deleted
+    -- from inventory after shooting again
+
+    if casings_table_ids[obj:id()] then
+        table.remove(casings_table, 1)
+        casings_table_ids[obj:id()] = nil
     end
 end
 
 function on_game_start()
-    RegisterScriptCallback("actor_on_weapon_fired", actor_on_weapon_fired)
+    trace_text("Registering Weapons Drop Spent Casings")
+    build_weapons_table()
+
+    ammo_settings_ini = ini_file_ex("plugins\\ammo_maker\\importer.ltx")
     part_lookup = ini_file_ex("parts\\importer.ltx")
+    RegisterScriptCallback("actor_on_item_take", actor_on_item_take)
+    RegisterScriptCallback("actor_on_weapon_fired", actor_on_weapon_fired)
+    RegisterScriptCallback("actor_on_first_update", load_settings)
+    RegisterScriptCallback("on_option_change", load_settings)
 end

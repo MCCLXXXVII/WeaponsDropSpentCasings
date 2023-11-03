@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="windows-1251"?>
+
+<string_table>
+	<string id="ui_mcm_weapons_drop_spent_casings_title">
+		<text>Weapons Drop Spent Casings</text>
+	</string>
+	<string id="ui_mcm_menu_weapons_drop_spent_casings">
+		<text>Weapons Drop Spent Casings</text>
+	</string>
+	<string id="ui_mcm_weapons_drop_spent_casings_casings_max_amount">
+		<text>Maximum amount that can be in the world at any given time</text>
+	</string>
+	<string id="ui_mcm_weapons_drop_spent_casings_drop_to_inventory">
+		<text>Spawn in inventory. Disable to drop in world.</text>
+	</string>
+	<string id="ui_mcm_weapons_drop_spent_casings_enable_debug">
+		<text>Enable debug logging</text>
+	</string>
+</string_table>
